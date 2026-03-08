@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>iPhone Pro Max Camera</title>
+    <style>
+        :root { --accent: #ffd700; --bg: #000; }
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { background: var(--bg); color: #fff; font-family: -apple-system, BlinkMacSystemFont, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+        /* Camera Viewport - Height set to 50% to lift buttons up */
+        .viewport { position: relative; width: 100%; height: 50vh; background: #000; display: flex; align-items: center; overflow: hidden; }
+        video { width: 100%; height: 100%; object-box: contain; transition: filter 0.3s; }
+
+        /* Filter Selector - iPhone Style */
+        .filter-container { background: #000; padding: 10px 0; border-bottom: 1px solid #1c1c1e; }
+        .filter-scroll { display: flex; overflow-x: auto; gap: 15px; padding: 0 20px; scrollbar-width: none; }
+        .filter-scroll::-webkit-scrollbar { display: none; }
+        .f-item { min-width: 60px; text-align: center; }
+        .f-preview { width: 50px; height: 50px; border-radius: 50%; border: 2px solid #333; margin-bottom: 4px; background: #222; overflow: hidden; }
+        .f-item.active .f-preview { border-color: var(--accent); }
+        .f-item p { font-size: 10px; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; }
+        .f-item.active p { color: #fff; font-weight: bold; }
+
+        /* Controls Panel */
+        .panel { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: space-evenly; padding: 10px 0 30px 0; }
+        
+        /* Zoom Indicator */
+        .zoom-wrap { text-align: center; margin-bottom: 5px; }
+        .z-val { background: rgba(255,255,255,0.15); padding: 2px 10px; border-radius: 12px; font-size: 12px; color: var(--accent); }
+        .zoom-slider { width: 85%; accent-color: var(--accent); height: 8px; margin-top: 10px; }
+
+        /* Shutter & Buttons */
+        .shutter-row { width: 100%; display: flex; justify-content: space-around; align-items: center; }
+        .shutter-btn { width: 70px; height: 70px; border-radius: 50%; border: 4px solid #fff; padding: 4px; background: none; }
+        .shutter-in { width: 100%; height: 100%; background: #fff; border-radius: 50%; transition: 0.2s; }
+        .shutter-in:active { transform: scale(0.9); background: #d1d1d6; }
+
+        .side-btn { background: #1c1c1e; border: none; width: 45px; height: 45px; border-radius: 50%; color: #fff; font-size: 20px; display: flex; align-items: center; justify-content: center; }
+        .preview-box { width: 45px; height: 45px; border-radius: 8px; background: #333; object-fit: cover; border: 1px solid #444; }
+    </style>
+</head>
+<body>
+
+<div class="viewport">
+    <video id="video" autoplay playsinline></video>
+</div>
+
+<div class="filter-container">
+    <div class="filter-scroll" id="fList">
+        </div>
+</div>
+
+<div class="panel">
+    <div class="zoom-wrap">
+        <span class="z-val" id="zLabel">1.0x</span><br>
+        <input type="range" class="zoom-slider" id="zoom" min="1" max="10" step="0.1" value="1">
+    </div>
+
+    <div class="shutter-row">
+        <img id="prevImg" class="preview-box">
+        <button class="shutter-btn" onclick="takePhoto()"><div class="shutter-in"></div></button>
+        <button class="side-btn" onclick="switchCam()">🔄</button>
+    </div>
+    <p style="font-size: 10px; color: #444; letter-spacing: 2px;">PHOTO</p>
+</div>
+
+<canvas id="canvas" style="display:none;"></canvas>
+
+<script>
+    const video = document.getElementById('video');
+    const zoom = document.getElementById('zoom');
+    const fList = document.getElementById('fList');
+    let track;
+
+    // iPhone Style Filter List
+    const iphoneFilters = [
+        { name: "Original", val: "none" },
+        { name: "Vivid", val: "saturate(1.8) contrast(1.1)" },
+        { name: "Vivid Warm", val: "saturate(1.8) sepia(0.2) contrast(1.1)" },
+        { name: "Vivid Cool", val: "saturate(1.8) hue-rotate(10deg) contrast(1.1)" },
+        { name: "Dramatic", val: "contrast(1.5) brightness(0.9) saturate(0.8)" },
+        { name: "Mono", val: "grayscale(1) contrast(1.2)" },
+        { name: "Silvertone", val: "grayscale(1) brightness(1.2) contrast(1.1)" },
+        { name: "Noir", val: "grayscale(1) contrast(1.8) brightness(0.7)" }
+    ];
+
+    // Generate 50 Filters
+    for(let i=1; i<=42; i++) {
+        iphoneFilters.push({ 
+            name: "Style " + i, 
+            val: `hue-rotate(${i*12}deg) saturate(${1.1 + (i/40)}) contrast(1.05)` 
+        });
+    }
+
+    iphoneFilters.forEach((f, idx) => {
+        const item = document.createElement('div');
+        item.className = `f-item ${idx===0?'active':''}`;
+        item.onclick = () => {
+            video.style.filter = f.val;
+            document.querySelectorAll('.f-item').forEach(i => i.classList.remove('active'));
+            item.classList.add('active');
+        };
+        item.innerHTML = `<div class="f-preview" style="filter:${f.val}; background:#333"></div><p>${f.name}</p>`;
+        fList.appendChild(item);
+    });
+
+    async function init(face = "environment") {
+        if (track) track.stop();
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: face, width: { ideal: 4096 }, height: { ideal: 2160 } }
+            });
+            video.srcObject = stream;
+            track = stream.getVideoTracks()[0];
+        } catch (e) { alert("Please use HTTPS or Localhost for Camera"); }
+    }
+
+    zoom.oninput = () => {
+        const v = zoom.value;
+        document.getElementById('zLabel').innerText = v + "x";
+        video.style.transform = `scale(${v})`; 
+        // Quality Fix: Hardware Zoom command
+        if (track && track.getCapabilities().zoom) {
+            track.applyConstraints({advanced: [{zoom: v}]});
+        }
+    };
+
+    function takePhoto() {
+        const canvas = document.getElementById('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        
+        // Anti-Pixel Burst Settings
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.filter = getComputedStyle(video).filter;
+        
+        ctx.drawImage(video, 0, 0);
+        const data = canvas.toDataURL('image/jpeg', 1.0);
+        document.getElementById('prevImg').src = data;
+        
+        const link = document.createElement('a');
+        link.href = data;
+        link.download = `IMG_IPHONE_${Date.now()}.jpg`;
+        link.click();
+    }
+
+    let mode = "environment";
+    function switchCam() {
+        mode = mode === "environment" ? "user" : "environment";
+        init(mode);
+    }
+
+    init();
+</script>
+</body>
+</html>
